@@ -1,563 +1,446 @@
-from textual.app import App, ComposeResult
-from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
-from textual.widgets import Header, Footer, Button, Static, DataTable, Input, RichLog, TabbedContent, TabPane, Label
-from textual.binding import Binding
-from textual.screen import Screen
-import feedparser
-import requests
-import re
-from datetime import datetime
-from typing import List, Dict, Any
-from time import strftime
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+CLI Interactif pour l'analyse des CVE provenant de l'ANSSI, MITRE et FIRST
+"""
 
-class CVEDetailScreen(Screen):
-    """Screen to display detailed CVE information"""
+import json
+import os
+from pathlib import Path
+from typing import Dict, List, Optional
+from collections import defaultdict
+
+
+class CVEExplorer:
+    """Classe pour charger et explorer les données CVE"""
     
-    BINDINGS = [
-        Binding("escape", "back", "Back"),
-    ]
+    def __init__(self, data_path: str = "./data"):
+        self.data_path = Path(data_path)
+        self.cve_data = defaultdict(lambda: {
+            "mitre": None,
+            "first": None,
+            "avis": [],
+            "alertes": []
+        })
+        self.load_all_data()
     
-    def __init__(self, cve_id: str):
-        super().__init__()
-        self.cve_id = cve_id
-        self.cve_data = None
-        self.epss_data = None
+    def load_json_files(self, directory: Path) -> List[tuple]:
+        """Charge tous les fichiers JSON d'un répertoire et retourne (filename, content)"""
+        data = []
+        
+        # Vérifier l'existence du répertoire
+        if not directory.exists():
+            print(f"⚠️  Répertoire non trouvé: {directory.absolute()}")
+            return data
+        
+        # Lister tous les fichiers (pas seulement .json car ils n'ont pas d'extension)
+        all_files = [f for f in directory.iterdir() if f.is_file()]
+        print(f"   📁 Chemin: {directory.absolute()}")
+        print(f"   📄 Fichiers trouvés: {len(all_files)}")
+        
+        for file in all_files:
+            try:
+                with open(file, 'r', encoding='utf-8') as f:
+                    content = json.load(f)
+                    # Le nom du fichier EST le CVE-ID ou CERTFR-ID (sans extension)
+                    filename = file.name  # ex: "CVE-2001-1267" ou "CERTFR-2021-ALE-001"
+                    data.append((filename, content))
+            except json.JSONDecodeError as e:
+                # Fichier non-JSON, on ignore
+                pass
+            except Exception as e:
+                print(f"❌ Erreur lors du chargement de {file.name}: {e}")
+        
+        return data
     
-    def compose(self) -> ComposeResult:
-        yield Header()
-        with ScrollableContainer(id="cve-scroll"):
-            yield Static(f"Loading CVE details for {self.cve_id}...", id="cve-details")
-        yield Footer()
+    def load_all_data(self):
+        """Charge toutes les données des 4 sources"""
+        print("🔄 Chargement des données...")
+        
+        # Charger les alertes (fichiers nommés CERTFR-YYYY-ALE-XXX.json)
+        alertes_dir = self.data_path / "alertes"
+        alertes = self.load_json_files(alertes_dir)
+        print(f"  ✓ {len(alertes)} alertes chargées")
+        
+        for filename, alerte in alertes:
+            if "cves" in alerte:
+                for cve in alerte["cves"]:
+                    cve_id = cve["name"]
+                    self.cve_data[cve_id]["alertes"].append(alerte)
+        
+        # Charger les avis (fichiers nommés CERTFR-YYYY-AVI-XXXX.json)
+        avis_dir = self.data_path / "avis"
+        avis = self.load_json_files(avis_dir)
+        print(f"  ✓ {len(avis)} avis chargés")
+        
+        for filename, avi in avis:
+            if "cves" in avi:
+                for cve in avi["cves"]:
+                    cve_id = cve["name"]
+                    self.cve_data[cve_id]["avis"].append(avi)
+        
+        # Charger les données MITRE (fichiers nommés CVE-YYYY-NNNNN.json)
+        mitre_dir = self.data_path / "mitre"
+        mitres = self.load_json_files(mitre_dir)
+        print(f"  ✓ {len(mitres)} entrées MITRE chargées")
+        
+        for filename, mitre in mitres:
+            # Le nom du fichier est directement le CVE-ID
+            cve_id = filename
+            self.cve_data[cve_id]["mitre"] = mitre
+        
+        # Charger les données FIRST/EPSS (fichiers nommés CVE-YYYY-NNNNN.json)
+        first_dir = self.data_path / "first"
+        firsts = self.load_json_files(first_dir)
+        print(f"  ✓ {len(firsts)} fichiers FIRST chargés")
+        
+        for filename, first in firsts:
+            # Le nom du fichier est le CVE-ID
+            cve_id = filename
+            # Les données EPSS sont dans le champ "data"
+            if "data" in first and len(first["data"]) > 0:
+                self.cve_data[cve_id]["first"] = first["data"][0]
+            else:
+                # Si pas de structure "data", on prend le contenu directement
+                self.cve_data[cve_id]["first"] = first
+        
+        print(f"\n✅ Total: {len(self.cve_data)} CVE uniques trouvées\n")
     
-    def on_mount(self) -> None:
-        self.fetch_cve_details()
+    def get_all_cves(self) -> List[str]:
+        """Retourne la liste de toutes les CVE disponibles"""
+        return sorted(self.cve_data.keys())
     
-    def fetch_cve_details(self) -> None:
-        try:
-            # Fetch CVE details from MITRE
-            url = f"https://cveawg.mitre.org/api/cve/{self.cve_id}"
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            self.cve_data = response.json()
-            
-            # Fetch EPSS score
-            epss_url = f"https://api.first.org/data/v1/epss?cve={self.cve_id}"
-            epss_response = requests.get(epss_url, timeout=10)
-            self.epss_data = epss_response.json()
-            
-            self.display_cve_details()
-        except Exception as e:
-            self.query_one("#cve-details", Static).update(f"[red]Error fetching CVE details: {str(e)}[/red]")
-    
-    def display_cve_details(self) -> None:
-        if not self.cve_data:
-            return
+    def extract_cvss_info(self, mitre_data: dict) -> dict:
+        """Extrait les informations CVSS depuis les données MITRE"""
+        cvss_info = {
+            "score": None,
+            "severity": None,
+            "vector": None
+        }
         
         try:
-            # Extract description
-            description = self.cve_data["containers"]["cna"]["descriptions"][0]["value"]
-            
-            # Extract CVSS score (try different versions)
-            cvss_score = "N/A"
-            cvss_severity = "N/A"
-            metrics = self.cve_data["containers"]["cna"].get("metrics", [])
-            if metrics:
+            if "containers" in mitre_data and "cna" in mitre_data["containers"]:
+                metrics = mitre_data["containers"]["cna"].get("metrics", [])
+                
                 for metric in metrics:
                     if "cvssV3_1" in metric:
-                        cvss_score = metric["cvssV3_1"]["baseScore"]
-                        cvss_severity = metric["cvssV3_1"].get("baseSeverity", "N/A")
+                        cvss = metric["cvssV3_1"]
+                        cvss_info["score"] = cvss.get("baseScore")
+                        cvss_info["severity"] = cvss.get("baseSeverity")
+                        cvss_info["vector"] = cvss.get("vectorString")
                         break
                     elif "cvssV3_0" in metric:
-                        cvss_score = metric["cvssV3_0"]["baseScore"]
-                        cvss_severity = metric["cvssV3_0"].get("baseSeverity", "N/A")
+                        cvss = metric["cvssV3_0"]
+                        cvss_info["score"] = cvss.get("baseScore")
+                        cvss_info["severity"] = cvss.get("baseSeverity")
+                        cvss_info["vector"] = cvss.get("vectorString")
+                        break
+                    elif "cvssV2_0" in metric:
+                        cvss = metric["cvssV2_0"]
+                        cvss_info["score"] = cvss.get("baseScore")
+                        cvss_info["vector"] = cvss.get("vectorString")
+                        break
+        except Exception as e:
+            pass  # Silencieux pour ne pas polluer l'affichage
+        
+        return cvss_info
+    
+    def extract_cwe_info(self, mitre_data: dict) -> List[str]:
+        """Extrait les CWE depuis les données MITRE"""
+        cwes = []
+        
+        try:
+            if "containers" in mitre_data and "cna" in mitre_data["containers"]:
+                problem_types = mitre_data["containers"]["cna"].get("problemTypes", [])
+                
+                for pt in problem_types:
+                    for desc in pt.get("descriptions", []):
+                        cwe_id = desc.get("cweId")
+                        if cwe_id:
+                            cwes.append(cwe_id)
+        except Exception as e:
+            pass
+        
+        return cwes
+    
+    def display_cve_details(self, cve_id: str):
+        """Affiche tous les détails d'une CVE"""
+        if cve_id not in self.cve_data:
+            print(f"❌ CVE {cve_id} non trouvée dans la base de données")
+            return
+        
+        data = self.cve_data[cve_id]
+        
+        print("\n" + "="*80)
+        print(f"📋 DÉTAILS COMPLETS POUR: {cve_id}")
+        print("="*80)
+        
+        # ===== MITRE =====
+        print("\n🔍 DONNÉES MITRE (CVE)")
+        print("-" * 80)
+        
+        if data["mitre"]:
+            mitre = data["mitre"]
+            
+            # Description
+            if "containers" in mitre and "cna" in mitre["containers"]:
+                descriptions = mitre["containers"]["cna"].get("descriptions", [])
+                for desc in descriptions:
+                    if desc.get("lang") == "en":
+                        print(f"Description: {desc.get('value', 'N/A')}")
                         break
             
-            # Extract CWE
-            cwe = "Non disponible"
-            cwe_desc = "Non disponible"
-            problemtype = self.cve_data["containers"]["cna"].get("problemTypes", [])
-            if problemtype and "descriptions" in problemtype[0]:
-                cwe = problemtype[0]["descriptions"][0].get("cweId", "Non disponible")
-                cwe_desc = problemtype[0]["descriptions"][0].get("description", "Non disponible")
+            # Date de publication
+            if "cveMetadata" in mitre:
+                published = mitre["cveMetadata"].get("datePublished", "N/A")
+                print(f"Date de publication: {published}")
             
-            # Extract EPSS score
-            epss_score = "N/A"
-            epss_percentile = "N/A"
-            if self.epss_data and self.epss_data.get("data"):
-                epss_score = self.epss_data["data"][0]["epss"]
-                epss_percentile = self.epss_data["data"][0].get("percentile", "N/A")
+            # CVSS
+            cvss_info = self.extract_cvss_info(mitre)
+            if cvss_info["score"]:
+                print(f"\nScore CVSS: {cvss_info['score']}")
+                if cvss_info["severity"]:
+                    print(f"Sévérité: {cvss_info['severity']}")
+                if cvss_info["vector"]:
+                    print(f"Vecteur: {cvss_info['vector']}")
+            else:
+                print("\nScore CVSS: Non disponible")
             
-            # Extract affected products
-            affected_products = []
-            affected = self.cve_data["containers"]["cna"].get("affected", [])
-            for product in affected:
-                vendor = product.get("vendor", "Unknown")
-                product_name = product.get("product", "Unknown")
-                versions = [v["version"] for v in product.get("versions", []) if v.get("status") == "affected"]
-                affected_products.append(f"  • {vendor} - {product_name}: {', '.join(versions) if versions else 'All versions'}")
+            # CWE
+            cwes = self.extract_cwe_info(mitre)
+            if cwes:
+                print(f"CWE: {', '.join(cwes)}")
+            else:
+                print("CWE: Non disponible")
             
-            # Determine severity color
-            severity_color = "white"
-            if cvss_score != "N/A":
-                score = float(cvss_score)
-                if score >= 9.0:
-                    severity_color = "red bold"
-                elif score >= 7.0:
-                    severity_color = "yellow bold"
-                elif score >= 4.0:
-                    severity_color = "cyan"
+            # Produits affectés
+            if "containers" in mitre and "cna" in mitre["containers"]:
+                affected = mitre["containers"]["cna"].get("affected", [])
+                if affected:
+                    print("\nProduits affectés:")
+                    for aff in affected[:5]:  # Limiter à 5
+                        vendor = aff.get("vendor", "N/A")
+                        product = aff.get("product", "N/A")
+                        versions = aff.get("versions", [])
+                        version_str = ", ".join([v.get("version", "") for v in versions[:3]])
+                        if version_str:
+                            print(f"  • {vendor} {product} ({version_str})")
+                        else:
+                            print(f"  • {vendor} {product}")
+        else:
+            print("❌ Pas de données MITRE disponibles")
+        
+        # ===== FIRST (EPSS) =====
+        print("\n📊 DONNÉES FIRST (EPSS)")
+        print("-" * 80)
+        
+        if data["first"]:
+            first = data["first"]
+            epss = first.get("epss", 0)
+            percentile = first.get("percentile", 0)
+            date = first.get("date", "N/A")
+            
+            # Convertir en float si c'est une string
+            if isinstance(epss, str):
+                epss = float(epss)
+            if isinstance(percentile, str):
+                percentile = float(percentile)
+            
+            print(f"Score EPSS: {epss:.6f} ({epss*100:.4f}%)")
+            print(f"Percentile: {percentile:.6f} ({percentile*100:.4f}%)")
+            print(f"Date: {date}")
+            print(f"\n💡 Interprétation: Cette CVE a {epss*100:.4f}% de probabilité")
+            print(f"   d'être exploitée dans les 30 prochains jours.")
+            
+            # Évaluation du risque
+            if epss > 0.5:
+                print("   ⚠️  RISQUE TRÈS ÉLEVÉ d'exploitation")
+            elif epss > 0.1:
+                print("   ⚠️  Risque élevé d'exploitation")
+            elif epss > 0.01:
+                print("   ⚠️  Risque modéré d'exploitation")
+            else:
+                print("   ✓ Risque faible d'exploitation")
+        else:
+            print("❌ Pas de données EPSS disponibles")
+        
+        # ===== ALERTES ANSSI =====
+        print("\n🚨 ALERTES CERT-FR (ANSSI)")
+        print("-" * 80)
+        
+        if data["alertes"]:
+            for alerte in data["alertes"]:
+                print(f"\n🔴 {alerte.get('reference', 'N/A')}")
+                print(f"Titre: {alerte.get('title', 'N/A')}")
+                
+                risks = alerte.get("risks", [])
+                if risks:
+                    print(f"Risques: {', '.join([r['description'] for r in risks])}")
+                
+                closed = alerte.get("closed_at")
+                if closed:
+                    print(f"Clôturée le: {closed}")
                 else:
-                    severity_color = "green"
-            
-            # Build display text
-            details_text = f"""[bold cyan]{self.cve_id}[/bold cyan]
+                    print("⚠️  Alerte ACTIVE")
+                
+                # Systèmes affectés
+                affected = alerte.get("affected_systems", [])
+                if affected:
+                    print("\nSystèmes affectés:")
+                    for sys in affected[:3]:
+                        vendor = sys.get("product", {}).get("vendor", {}).get("name", "N/A")
+                        product = sys.get("product", {}).get("name", "N/A")
+                        desc = sys.get("description", "")
+                        print(f"  • {vendor} {product}: {desc}")
+                
+                # Nombre de révisions
+                revisions = alerte.get("revisions", [])
+                if revisions:
+                    print(f"\nNombre de révisions: {len(revisions)}")
+                
+                print(f"\n🔗 URL: https://www.cert.ssi.gouv.fr/alerte/{alerte.get('reference', '')}/")
+        else:
+            print("✓ Aucune alerte CERT-FR pour cette CVE")
+        
+        # ===== AVIS ANSSI =====
+        print("\n📢 AVIS CERT-FR (ANSSI)")
+        print("-" * 80)
+        
+        if data["avis"]:
+            for avis in data["avis"]:
+                print(f"\n🔵 {avis.get('reference', 'N/A')}")
+                print(f"Titre: {avis.get('title', 'N/A')}")
+                
+                risks = avis.get("risks", [])
+                if risks:
+                    print(f"Risques: {', '.join([r['description'] for r in risks])}")
+                
+                # Systèmes affectés
+                affected = avis.get("affected_systems", [])
+                if affected:
+                    print("\nSystèmes affectés:")
+                    for sys in affected[:3]:
+                        vendor = sys.get("product", {}).get("vendor", {}).get("name", "N/A")
+                        product = sys.get("product", {}).get("name", "N/A")
+                        desc = sys.get("description", "")
+                        print(f"  • {vendor} {product}: {desc}")
+                
+                # Nombre de révisions
+                revisions = avis.get("revisions", [])
+                if revisions:
+                    print(f"\nNombre de révisions: {len(revisions)}")
+                
+                print(f"\n🔗 URL: https://www.cert.ssi.gouv.fr/avis/{avis.get('reference', '')}/")
+        else:
+            print("✓ Aucun avis CERT-FR pour cette CVE")
+        
+        print("\n" + "="*80 + "\n")
 
-[bold]Description:[/bold]
-{description}
 
-[bold]Scores:[/bold]
-  • CVSS Score: [{severity_color}]{cvss_score}[/{severity_color}] ({cvss_severity})
-  • EPSS Score: {epss_score} (Percentile: {epss_percentile})
-
-[bold]CWE Information:[/bold]
-  • Type: {cwe}
-  • Description: {cwe_desc}
-
-[bold]Affected Products:[/bold]
-{''.join([f'\n{p}' for p in affected_products]) if affected_products else '\n  No products listed'}
-
-[dim]Press ESC to go back[/dim]
-"""
-            
-            self.query_one("#cve-details", Static).update(details_text)
-        except Exception as e:
-            self.query_one("#cve-details", Static).update(f"[red]Error parsing CVE data: {str(e)}[/red]")
+def main():
+    """Point d'entrée du programme CLI"""
     
-    def action_back(self) -> None:
-        self.app.pop_screen()
-
-class EntryDetailScreen(Screen):
-    """Screen to display entry details with extracted CVEs"""
+    print("""
+╔═══════════════════════════════════════════════════════════════════════╗
+║                  🛡️  EXPLORATEUR CVE ANSSI/MITRE/FIRST              ║
+║                     Analyse de Vulnérabilités                         ║
+╚═══════════════════════════════════════════════════════════════════════╝
+    """)
     
-    BINDINGS = [
-        Binding("escape", "back", "Back"),
-    ]
+    # Initialiser l'explorateur
+    explorer = CVEExplorer()
     
-    def __init__(self, entry_title: str, entry_link: str):
-        super().__init__()
-        self.entry_title = entry_title
-        self.entry_link = entry_link
-        self.cve_list = []
+    if not explorer.cve_data:
+        print("❌ Aucune donnée chargée. Vérifiez le chemin du répertoire.")
+        print("💡 Le programme recherche les données dans: ./data/")
+        print("   avec les sous-dossiers: alertes/, avis/, mitre/, first/")
+        return
     
-    def compose(self) -> ComposeResult:
-        yield Header()
-        with Vertical():
-            yield Static(f"[bold cyan]{self.entry_title}[/bold cyan]", id="entry-title")
-            yield Static(f"[dim]{self.entry_link}[/dim]", id="entry-link")
-            yield Static("Loading CVEs...", id="cve-status")
-            yield DataTable(id="cve-table")
-        yield Footer()
-    
-    def on_mount(self) -> None:
-        table = self.query_one("#cve-table", DataTable)
-        table.add_columns("CVE ID", "CVSS", "EPSS", "Description")
-        table.cursor_type = "row"
-        self.fetch_cves()
-    
-    def fetch_cves(self) -> None:
-        try:
-            json_url = self.entry_link.rstrip("/") + "/json/"
-            response = requests.get(json_url, timeout=10)
-            data = response.json()
+    while True:
+        print("\n" + "─" * 80)
+        print("🔍 MENU PRINCIPAL")
+        print("─" * 80)
+        print("1. 📋 Lister toutes les CVE disponibles")
+        print("2. 🔎 Rechercher une CVE spécifique")
+        print("3. 🎲 Afficher une CVE aléatoire")
+        print("4. 📊 Statistiques générales")
+        print("5. 🚪 Quitter")
+        print()
+        
+        choix = input("Votre choix (1-5): ").strip()
+        
+        if choix == "1":
+            # Lister toutes les CVE
+            cves = explorer.get_all_cves()
+            print(f"\n📋 {len(cves)} CVE disponibles:\n")
             
-            # Extract CVEs from the 'cves' field
-            ref_cves = data.get("cves", [])
+            # Afficher par groupes de 4
+            for i, cve in enumerate(cves, 1):
+                print(f"  {cve}", end="")
+                if i % 4 == 0:
+                    print()
+                else:
+                    print("  ", end="")
             
-            # Also extract CVEs using regex
-            cve_pattern = r"CVE-\d{4}-\d{4,7}"
-            cve_list = list(set(re.findall(cve_pattern, str(data))))
+            if len(cves) % 4 != 0:
+                print()
             
-            # Combine both lists
-            all_cves = set()
-            for cve in ref_cves:
-                all_cves.add(cve.get("name", ""))
-            all_cves.update(cve_list)
-            all_cves.discard("")
+            input("\n⏎ Appuyez sur Entrée pour continuer...")
+        
+        elif choix == "2":
+            # Rechercher une CVE
+            cve_id = input("\n🔎 Entrez l'identifiant CVE (ex: CVE-2021-20016): ").strip().upper()
             
-            self.cve_list = sorted(list(all_cves))
+            if not cve_id.startswith("CVE-"):
+                print("❌ Format invalide. Utilisez le format CVE-YYYY-NNNNN")
+                continue
             
-            status_text = f"Found {len(self.cve_list)} CVE(s)"
-            if len(self.cve_list) > 0:
-                status_text += " - Click on a row to see details"
-            self.query_one("#cve-status", Static).update(status_text)
-            
-            # Load CVE summary information
-            if self.cve_list:
-                self.load_cve_summaries()
+            explorer.display_cve_details(cve_id)
+            input("\n⏎ Appuyez sur Entrée pour continuer...")
+        
+        elif choix == "3":
+            # CVE aléatoire
+            import random
+            cves = explorer.get_all_cves()
+            if cves:
+                random_cve = random.choice(cves)
+                print(f"\n🎲 CVE aléatoire sélectionnée: {random_cve}")
+                explorer.display_cve_details(random_cve)
+                input("\n⏎ Appuyez sur Entrée pour continuer...")
             else:
-                self.query_one("#cve-status", Static).update("[yellow]No CVEs found in this entry[/yellow]")
+                print("❌ Aucune CVE disponible")
+        
+        elif choix == "4":
+            # Statistiques
+            print("\n📊 STATISTIQUES GÉNÉRALES")
+            print("=" * 80)
             
-        except Exception as e:
-            self.query_one("#cve-status", Static).update(f"[red]Error fetching CVEs: {str(e)}[/red]")
-    
-    def load_cve_summaries(self) -> None:
-        """Load basic info for each CVE"""
-        table = self.query_one("#cve-table", DataTable)
+            total_cves = len(explorer.cve_data)
+            cves_with_mitre = sum(1 for d in explorer.cve_data.values() if d["mitre"])
+            cves_with_first = sum(1 for d in explorer.cve_data.values() if d["first"])
+            cves_with_alertes = sum(1 for d in explorer.cve_data.values() if d["alertes"])
+            cves_with_avis = sum(1 for d in explorer.cve_data.values() if d["avis"])
+            
+            print(f"\nTotal CVE: {total_cves}")
+            print(f"  • Avec données MITRE: {cves_with_mitre} ({cves_with_mitre/total_cves*100:.1f}%)")
+            print(f"  • Avec données FIRST (EPSS): {cves_with_first} ({cves_with_first/total_cves*100:.1f}%)")
+            print(f"  • Mentionnées dans alertes: {cves_with_alertes} ({cves_with_alertes/total_cves*100:.1f}%)")
+            print(f"  • Mentionnées dans avis: {cves_with_avis} ({cves_with_avis/total_cves*100:.1f}%)")
+            
+            # CVE complètes (présentes dans les 4 sources)
+            cves_complete = sum(1 for d in explorer.cve_data.values() 
+                               if d["mitre"] and d["first"] and (d["alertes"] or d["avis"]))
+            print(f"\n🎯 CVE avec enrichissement complet: {cves_complete}")
+            
+            input("\n⏎ Appuyez sur Entrée pour continuer...")
         
-        for cve_id in self.cve_list:
-            try:
-                # Fetch basic CVE info
-                url = f"https://cveawg.mitre.org/api/cve/{cve_id}"
-                response = requests.get(url, timeout=5)
-                data = response.json()
-                
-                # Get CVSS score
-                cvss_score = "N/A"
-                metrics = data["containers"]["cna"].get("metrics", [])
-                if metrics:
-                    for metric in metrics:
-                        if "cvssV3_1" in metric:
-                            cvss_score = str(metric["cvssV3_1"]["baseScore"])
-                            break
-                        elif "cvssV3_0" in metric:
-                            cvss_score = str(metric["cvssV3_0"]["baseScore"])
-                            break
-                
-                # Get EPSS score
-                epss_score = "N/A"
-                epss_url = f"https://api.first.org/data/v1/epss?cve={cve_id}"
-                epss_response = requests.get(epss_url, timeout=5)
-                epss_data = epss_response.json()
-                if epss_data.get("data"):
-                    epss_score = epss_data["data"][0]["epss"]
-                
-                # Get description (truncated)
-                description = data["containers"]["cna"]["descriptions"][0]["value"]
-                desc_short = description[:60] + "..." if len(description) > 60 else description
-                
-                table.add_row(cve_id, cvss_score, epss_score, desc_short)
-                
-            except Exception as e:
-                table.add_row(cve_id, "Error", "Error", f"Failed to load: {str(e)[:30]}")
-    
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """Handle CVE selection"""
-        table = self.query_one("#cve-table", DataTable)
-        row = table.get_row(event.row_key)
-        cve_id = row[0]
+        elif choix == "5":
+            print("\n👋 Au revoir!\n")
+            break
         
-        if cve_id and not cve_id.startswith("Error"):
-            self.app.push_screen(CVEDetailScreen(cve_id))
-    
-    def action_back(self) -> None:
-        self.app.pop_screen()
+        else:
+            print("❌ Choix invalide. Veuillez choisir entre 1 et 5.")
 
-class ANSSIMonitorApp(App):
-    """A Textual app to monitor ANSSI security advisories and alerts."""
-    
-    CSS = """
-    #feed-container {
-        height: 100%;
-        border: solid green;
-    }
-    
-    #cve-container, #cve-scroll {
-        height: 100%;
-        border: solid cyan;
-        padding: 1 2;
-    }
-    
-    DataTable {
-        height: 1fr;
-    }
-    
-    #status-log {
-        height: 10;
-        border: solid yellow;
-        margin-top: 1;
-    }
-    
-    .button-row {
-        height: auto;
-        margin: 1 0;
-    }
-    
-    Button {
-        margin: 0 1;
-    }
-    
-    #entry-title {
-        margin: 1;
-    }
-    
-    #entry-link {
-        margin: 0 1 1 1;
-    }
-    
-    #cve-status {
-        margin: 1;
-        background: $boost;
-        padding: 1;
-    }
-    """
-    
-    BINDINGS = [
-        Binding("q", "quit", "Quit"),
-        Binding("r", "refresh", "Refresh"),
-        Binding("c", "clear_log", "Clear Log"),
-    ]
-    
-    # All available ANSSI RSS feeds
-    FEED_URLS = {
-        "avis": "https://www.cert.ssi.gouv.fr/avis/feed/",
-        "alertes": "https://www.cert.ssi.gouv.fr/alerte/feed/",
-        "complet": "https://www.cert.ssi.gouv.fr/feed/",
-        "actualite": "https://www.cert.ssi.gouv.fr/actualite/feed/",
-        "scada": "https://www.cert.ssi.gouv.fr/feed/scada/",
-        "cti": "https://www.cert.ssi.gouv.fr/cti/feed/",
-        "ioc": "https://www.cert.ssi.gouv.fr/ioc/feed/",
-        "dur": "https://www.cert.ssi.gouv.fr/dur/feed/"
-    }
-    
-    def __init__(self):
-        super().__init__()
-        self.current_feed_type = "complet"
-        self.feed_data = []
-    
-    def compose(self) -> ComposeResult:
-        yield Header()
-        
-        with TabbedContent():
-            with TabPane("Feed Viewer"):
-                with Vertical(id="feed-container"):
-                    with Horizontal(classes="button-row"):
-                        yield Button("Avis", id="btn-avis", variant="primary")
-                        yield Button("Alertes", id="btn-alertes", variant="primary")
-                        yield Button("Complet", id="btn-complet", variant="success")
-                        yield Button("Actualité", id="btn-actualite", variant="primary")
-                    with Horizontal(classes="button-row"):
-                        yield Button("SCADA", id="btn-scada", variant="warning")
-                        yield Button("CTI", id="btn-cti", variant="warning")
-                        yield Button("IOC", id="btn-ioc", variant="warning")
-                        yield Button("DUR", id="btn-dur", variant="warning")
-                        yield Button("Refresh", id="btn-refresh", variant="default")
-                    
-                    yield DataTable(id="feed-table")
-                    yield RichLog(id="status-log", highlight=True)
-            
-            with TabPane("CVE Search"):
-                with Vertical():
-                    with Horizontal(classes="button-row"):
-                        yield Label("CVE ID:")
-                        yield Input(placeholder="CVE-YYYY-NNNN", id="cve-input")
-                        yield Button("Search", id="btn-search-cve", variant="primary")
-                    yield ScrollableContainer(
-                        Static("Enter a CVE ID to search (e.g., CVE-2023-46805)", id="cve-search-results"),
-                    )
-        
-        yield Footer()
-    
-    def on_mount(self) -> None:
-        """Initialize the data table and load initial feed."""
-        table = self.query_one("#feed-table", DataTable)
-        table.add_columns("Date", "Type", "Title")
-        table.cursor_type = "row"
-        
-        self.log_message("[cyan]Welcome to ANSSI Monitor![/cyan]")
-        self.log_message(f"[dim]Available feeds: {', '.join(self.FEED_URLS.keys())}[/dim]")
-        self.load_feed("complet")
-    
-    def log_message(self, message: str) -> None:
-        """Log a message to the status log."""
-        status_log = self.query_one("#status-log", RichLog)
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        status_log.write(f"[{timestamp}] {message}")
-    
-    def action_clear_log(self) -> None:
-        """Clear the status log."""
-        status_log = self.query_one("#status-log", RichLog)
-        status_log.clear()
-        self.log_message("[dim]Log cleared[/dim]")
-    
-    def action_refresh(self) -> None:
-        """Refresh the current feed."""
-        self.load_feed(self.current_feed_type)
-    
-    def load_feed(self, feed_type: str) -> None:
-        """Load RSS feed based on type - Using notebook logic"""
-        self.current_feed_type = feed_type
-        
-        url = self.FEED_URLS.get(feed_type)
-        if not url:
-            self.log_message(f"[red]Unknown feed type: {feed_type}[/red]")
-            return
-        
-        self.log_message(f"Loading feed: [cyan]{feed_type}[/cyan] from {url}")
-        
-        try:
-            # Add headers to mimic a browser request
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
-            
-            # Fetch the URL directly
-            response = requests.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
-            
-            # Parse the feed
-            feed = feedparser.parse(response.content)
-            
-            # Check for parsing errors
-            if feed.bozo and feed.bozo_exception:
-                self.log_message(f"[yellow]Feed parsing warning: {feed.bozo_exception}[/yellow]")
-            
-            # Check if we got any entries
-            if not feed.entries:
-                self.log_message(f"[yellow]No entries found in feed[/yellow]")
-                
-                # Try to display feed metadata
-                if hasattr(feed, 'feed'):
-                    self.log_message(f"[dim]Feed title: {feed.feed.get('title', 'N/A')}[/dim]")
-                    self.log_message(f"[dim]Feed updated: {feed.feed.get('updated', 'N/A')}[/dim]")
-                
-                # Clear the table
-                table = self.query_one("#feed-table", DataTable)
-                table.clear()
-                return
-            
-            self.feed_data = feed.entries
-            
-            table = self.query_one("#feed-table", DataTable)
-            table.clear()
-            
-            entries_added = 0
-            for entry in feed.entries:
-                # Extract date with multiple fallback options
-                date = "N/A"
-                if hasattr(entry, 'published'):
-                    date = entry.published[:10] if len(entry.published) >= 10 else entry.published
-                elif hasattr(entry, 'updated'):
-                    date = entry.updated[:10] if len(entry.updated) >= 10 else entry.updated
-                elif hasattr(entry, 'published_parsed') and entry.published_parsed:
-                    date = strftime("%Y-%m-%d", entry.published_parsed)
-                
-                # Determine entry type from link
-                entry_type = "OTHER"
-                link = ""
-                
-                if hasattr(entry, 'link'):
-                    link = entry.link
-                    link_lower = link.lower()
-                    if "avis" in link_lower:
-                        entry_type = "AVIS"
-                    elif "alerte" in link_lower:
-                        entry_type = "ALERTE"
-                    elif "actualite" in link_lower:
-                        entry_type = "ACTU"
-                    elif "scada" in link_lower:
-                        entry_type = "SCADA"
-                    elif "cti" in link_lower:
-                        entry_type = "CTI"
-                    elif "ioc" in link_lower:
-                        entry_type = "IOC"
-                    elif "dur" in link_lower:
-                        entry_type = "DUR"
-                
-                # Extract title
-                title = "No title"
-                if hasattr(entry, 'title'):
-                    title = entry.title
-                elif hasattr(entry, 'summary'):
-                    # Use summary as title if title is missing
-                    title = entry.summary[:100] + "..." if len(entry.summary) > 100 else entry.summary
-                
-                # Only add row if we have at least a title or link
-                if title != "No title" or link:
-                    table.add_row(date, entry_type, title, key=link if link else f"row_{entries_added}")
-                    entries_added += 1
-            
-            if entries_added > 0:
-                self.log_message(f"[green]✓ Successfully loaded {entries_added} entries[/green]")
-            else:
-                self.log_message(f"[yellow]Parsed feed but found no valid entries[/yellow]")
-            
-        except requests.exceptions.Timeout:
-            self.log_message(f"[red]✗ Timeout error: The server took too long to respond[/red]")
-        except requests.exceptions.ConnectionError:
-            self.log_message(f"[red]✗ Connection error: Could not connect to the server[/red]")
-        except requests.exceptions.HTTPError as e:
-            self.log_message(f"[red]✗ HTTP error: {e}[/red]")
-        except Exception as e:
-            self.log_message(f"[red]✗ Error loading feed: {str(e)}[/red]")
-            self.log_message(f"[dim]Feed type: {feed_type}, URL: {url}[/dim]")
-    
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Handle button clicks."""
-        button_id = event.button.id
-        
-        if button_id == "btn-avis":
-            self.load_feed("avis")
-        elif button_id == "btn-alertes":
-            self.load_feed("alertes")
-        elif button_id == "btn-complet":
-            self.load_feed("complet")
-        elif button_id == "btn-actualite":
-            self.load_feed("actualite")
-        elif button_id == "btn-scada":
-            self.load_feed("scada")
-        elif button_id == "btn-cti":
-            self.load_feed("cti")
-        elif button_id == "btn-ioc":
-            self.load_feed("ioc")
-        elif button_id == "btn-dur":
-            self.load_feed("dur")
-        elif button_id == "btn-refresh":
-            self.action_refresh()
-        elif button_id == "btn-search-cve":
-            self.search_cve()
-    
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """Handle row selection in the data table."""
-        table = self.query_one("#feed-table", DataTable)
-        row_key = event.row_key
-        row = table.get_row(row_key)
-        
-        title = row[2]
-        link = str(row_key)
-        
-        if not link or link == "None" or link.startswith("row_"):
-            self.log_message("[yellow]No link available for this entry[/yellow]")
-            return
-        
-        self.log_message(f"[cyan]Selected:[/cyan] {title[:50]}...")
-        self.log_message(f"[dim]Opening entry details...[/dim]")
-        
-        # Open the entry detail screen
-        self.push_screen(EntryDetailScreen(title, link))
-    
-    def search_cve(self) -> None:
-        """Search for a specific CVE."""
-        input_widget = self.query_one("#cve-input", Input)
-        cve_id = input_widget.value.strip().upper()
-        
-        if not cve_id:
-            self.log_message("[yellow]Please enter a CVE ID[/yellow]")
-            return
-        
-        # Validate CVE format
-        if not re.match(r"CVE-\d{4}-\d{4,7}", cve_id):
-            self.log_message(f"[red]Invalid CVE format: {cve_id}[/red]")
-            self.log_message("[dim]Expected format: CVE-YYYY-NNNN (e.g., CVE-2023-46805)[/dim]")
-            return
-        
-        self.log_message(f"[cyan]Searching for {cve_id}...[/cyan]")
-        self.push_screen(CVEDetailScreen(cve_id))
-    
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Handle Enter key in CVE input."""
-        if event.input.id == "cve-input":
-            self.search_cve()
 
 if __name__ == "__main__":
-    app = ANSSIMonitorApp()
-    app.run()
+    main()
