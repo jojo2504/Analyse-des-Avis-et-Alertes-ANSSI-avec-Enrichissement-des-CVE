@@ -2,13 +2,21 @@ import pandas as pd
 from collect import Collector
 from extract import Extractor
 from enrich import Enrichment
+from utils import to_json_url
 
 def build_dataframe(rss_url, bulletin_type, enrichment: Enrichment, limit=5):
     rows = []
     entries = Collector.get_rss_entries(rss_url)
 
     for entry in entries[:limit]:
-        cves = Extractor.extract_cves_from_rss(entries)
+        # Extraire les CVE pour cette entrée spécifique
+        json_url = to_json_url(entry.link)
+        try:
+            data = Collector.fetch_json(json_url)
+            cves = Extractor.extract_cves_from_bulletin(data)
+        except Exception as e:
+            print(f"❌ Erreur lors de l'extraction pour {entry.title}: {e}")
+            continue
 
         for cve in cves:
             info = enrichment.enrich_cve(cve)
