@@ -8,7 +8,7 @@ def build_dataframe(rss_url, bulletin_type, enrichment: Enrichment, limit=5):
     entries = Collector.get_rss_entries(rss_url)
 
     for entry in entries[:limit]:
-        cves = Extractor.extract_cves_from_rss(rss_url)
+        cves = Extractor.extract_cves_from_rss(entries)
 
         for cve in cves:
             info = enrichment.enrich_cve(cve)
@@ -33,10 +33,3 @@ def build_dataframe(rss_url, bulletin_type, enrichment: Enrichment, limit=5):
                 })
 
     return pd.DataFrame(rows)
-
-if __name__ == "__main__":
-    enrichment = Enrichment()
-    rss = "https://www.cert.ssi.gouv.fr/avis/feed/"
-    df = build_dataframe(rss, "Avis", enrichment)
-    df.to_csv("cves_consolidees.csv", index=False)
-    print("CSV généré : cves_consolidees.csv")
