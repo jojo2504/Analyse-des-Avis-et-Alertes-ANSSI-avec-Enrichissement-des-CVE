@@ -80,6 +80,6 @@ EMAIL_PORT = 2525
 EMAIL_USE_TLS = True
 EMAIL_USE_SSL = False
 EMAIL_HOST_USER = '6e929032cf7089'
-REMOVED_SECRET
+EMAIL_HOST_PASSWORD = 'password' # Replace with your Mailtrap password 
 DEFAULT_FROM_EMAIL = 'alerts@cve-system.local'
 EMAIL_TIMEOUT = 30
