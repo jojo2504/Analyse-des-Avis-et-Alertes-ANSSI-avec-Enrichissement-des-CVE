@@ -5,10 +5,37 @@ echo ================================
 echo 🚀 Starting CVE Alert System
 echo ================================
 
+REM Check if virtual environment exists, if not create it
+if not exist "venv" (
+    echo.
+    echo 📦 Creating virtual environment...
+    python -m venv venv
+    echo ✅ Virtual environment created
+)
+
+REM Activate virtual environment
+echo.
+echo 🔧 Activating virtual environment...
+call venv\Scripts\activate.bat
+
+REM Install Python requirements
+echo.
+echo 📥 Installing Python dependencies...
+pip install -q -r requirements.txt
+echo ✅ Python dependencies installed
+
+REM Install npm dependencies in cve-frontend
+echo.
+echo 📥 Installing npm dependencies in cve-frontend...
+cd cve-frontend
+call npm install
+cd ..
+echo ✅ npm dependencies installed
+
 REM Start Django backend in a new window
 echo.
 echo 📦 Starting Django backend on http://127.0.0.1:8000
-start "Django Backend" cmd /k "python manage.py runserver"
+start "Django Backend" cmd /k "call ..\venv\Scripts\activate.bat && python manage.py runserver"
 
 REM Wait a moment for backend to start
 timeout /t 2 /nobreak >nul

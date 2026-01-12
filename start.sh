@@ -26,6 +26,29 @@ cleanup() {
 # Trap Ctrl+C and call cleanup
 trap cleanup SIGINT SIGTERM
 
+# Check if virtual environment exists, if not create it
+if [ ! -d "venv" ]; then
+    echo -e "\n${BLUE}📦 Creating virtual environment...${NC}"
+    python3 -m venv venv
+    echo -e "${GREEN}✅ Virtual environment created${NC}"
+fi
+
+# Activate virtual environment
+echo -e "\n${BLUE}🔧 Activating virtual environment...${NC}"
+source venv/bin/activate
+
+# Install Python requirements
+echo -e "\n${BLUE}📥 Installing Python dependencies...${NC}"
+pip install -q -r requirements.txt
+echo -e "${GREEN}✅ Python dependencies installed${NC}"
+
+# Install npm dependencies in cve-frontend
+echo -e "\n${BLUE}📥 Installing npm dependencies in cve-frontend...${NC}"
+cd cve-frontend
+npm install
+cd ..
+echo -e "${GREEN}✅ npm dependencies installed${NC}"
+
 # Start Django backend
 echo -e "\n${GREEN}📦 Starting Django backend on http://127.0.0.1:8000${NC}"
 python manage.py runserver &
