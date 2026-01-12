@@ -27,15 +27,21 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 # Check if virtual environment exists, if not create it
-if [ ! -d "venv" ]; then
+VENV_DIR=""
+if [ -d "venv" ]; then
+    VENV_DIR="venv"
+elif [ -d ".venv" ]; then
+    VENV_DIR=".venv"
+else
     echo -e "\n${BLUE}📦 Creating virtual environment...${NC}"
     python3 -m venv venv
+    VENV_DIR="venv"
     echo -e "${GREEN}✅ Virtual environment created${NC}"
 fi
 
 # Activate virtual environment
 echo -e "\n${BLUE}🔧 Activating virtual environment...${NC}"
-source venv/bin/activate
+source "$VENV_DIR/bin/activate"
 
 # Install Python requirements
 echo -e "\n${BLUE}📥 Installing Python dependencies...${NC}"
