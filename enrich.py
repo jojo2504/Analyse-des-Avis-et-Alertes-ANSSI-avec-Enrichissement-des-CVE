@@ -34,6 +34,7 @@ class Enrichment:
 
         # --- MITRE ---
         try:
+            print(f"    🔍 Récupération MITRE pour {cve_id}...")
             mitre = Collector.fetch_mitre(cve_id)
             cna = mitre["containers"]["cna"]
 
@@ -70,18 +71,21 @@ class Enrichment:
                     "product": product,
                     "versions": versions
                 })
+            print(f"    ✅ MITRE récupéré (CVSS: {cvss_score}, Severity: {severity})")
 
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"    ⚠️  Erreur MITRE: {e}")
 
         # --- EPSS ---
         try:
+            print(f"    🔍 Récupération EPSS pour {cve_id}...")
             epss = Collector.fetch_epss(cve_id)
             data = epss.get("data", [])
             if data:
                 epss_score = data[0].get("epss", epss_score)
-        except Exception:
-            pass
+            print(f"    ✅ EPSS récupéré: {epss_score}")
+        except Exception as e:
+            print(f"    ⚠️  Erreur EPSS: {e}")
 
         return {
             "cve": cve_id,
