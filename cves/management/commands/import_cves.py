@@ -43,6 +43,14 @@ class Command(BaseCommand):
                     self.stdout.write(self.style.WARNING(f'Could not parse date for {cve_id}, skipping'))
                     continue
                 
+                # Parse CVSS score
+                score_cvss = None
+                if row['Score CVSS'] and row['Score CVSS'] != 'Non disponible':
+                    try:
+                        score_cvss = float(row['Score CVSS'])
+                    except ValueError:
+                        pass
+                
                 # Create CVE
                 CVE.objects.create(
                     identifiant_cve=cve_id,
@@ -50,6 +58,7 @@ class Command(BaseCommand):
                     date_publication=date_publication,
                     lien_bulletin=row['Lien bulletin (ANSSI)'],
                     base_severity=row['Base Severity'] if row['Base Severity'] != 'Non disponible' else '',
+                    score_cvss=score_cvss,
                     description=row['Description'] if row['Description'] != 'Non disponible' else ''
                 )
                 

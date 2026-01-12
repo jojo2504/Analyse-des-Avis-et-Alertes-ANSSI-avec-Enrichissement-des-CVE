@@ -7,6 +7,7 @@ class CVE(models.Model):
     date_publication = models.DateField()
     lien_bulletin = models.URLField(max_length=500)
     base_severity = models.CharField(max_length=50, blank=True, null=True)
+    score_cvss = models.FloatField(blank=True, null=True)
     description = models.TextField(blank=True, default='')
     
     def __str__(self):
