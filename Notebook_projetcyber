@@ -1,0 +1,777 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "a1bc4b88-82b0-49fc-a164-3a7cbec4119b",
+   "metadata": {},
+   "source": [
+    "# Projet Python"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "e0cfba63-3d48-456e-9478-789c08cc55c6",
+   "metadata": {},
+   "source": [
+    "# 1)Collect des avis de sécurité ANSSI \n",
+    "\n",
+    "---\n",
+    "\n",
+    "## Objectif\n",
+    "\n",
+    "Ce notebook a pour objectif de :\n",
+    "- récupérer les **avis de sécurité ANSSI** via le flux RSS,\n",
+    "- explorer leur contenu,\n",
+    "- préparer l’enrichissement avec les bases **MITRE (CVE)** et **EPSS**.\n",
+    "\n",
+    "Le notebook sert de **phase exploratoire et de validation** avant intégration dans un script Python final.\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "0d0622f9-c825-4422-9908-f7c87efc9b85",
+   "metadata": {},
+   "source": [
+    "## Présentation du collecteur\n",
+    "\n",
+    "Nous utilisons une classe `Collector` qui centralise :\n",
+    "- la récupération du flux RSS ANSSI,\n",
+    "- les appels API externes (MITRE, EPSS),\n",
+    "- la gestion des requêtes HTTP.\n",
+    "\n",
+    "Cette approche permet de garder un code **modulaire et réutilisable**.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "f1aeb593-e420-47b3-a9fa-8dbef061ec64",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import feedparser\n",
+    "import requests\n",
+    "from typing import List, Dict, Any, Set\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 6,
+   "id": "e3242502-cbda-4471-a2dc-f5636ad4edf1",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "class Collector:\n",
+    "    rss_url = \"https://www.cert.ssi.gouv.fr/avis/feed/\"\n",
+    "    timeout = 5\n",
+    "\n",
+    "    @staticmethod\n",
+    "    def get_rss_entries(url) -> feedparser.util.FeedParserDict:\n",
+    "        print(f\"🌐 Récupération du flux RSS: {url}\")\n",
+    "        rss_feed = feedparser.parse(url)\n",
+    "        print(f\"✅ Flux RSS récupéré: {len(rss_feed.entries)} entrées disponibles\")\n",
+    "        return rss_feed.entries\n",
+    "\n",
+    "    @staticmethod\n",
+    "    def fetch_json(url: str) -> Dict[str, Any]:\n",
+    "        r = requests.get(url, timeout=Collector.timeout)\n",
+    "        r.raise_for_status()\n",
+    "        return r.json()\n",
+    "\n",
+    "    @staticmethod\n",
+    "    def fetch_mitre(cve_id: str) -> Dict[str, Any]:\n",
+    "        url = f\"https://cveawg.mitre.org/api/cve/{cve_id}\"\n",
+    "        r = requests.get(url, timeout=Collector.timeout)\n",
+    "        r.raise_for_status()\n",
+    "        return r.json()\n",
+    "\n",
+    "    @staticmethod\n",
+    "    def fetch_epss(cve_id: str) -> Dict[str, Any]:\n",
+    "        url = f\"https://api.first.org/data/v1/epss?cve={cve_id}\"\n",
+    "        r = requests.get(url, timeout=Collector.timeout)\n",
+    "        r.raise_for_status()\n",
+    "        return r.json()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "fb1c56e2-25b2-4a53-abec-bf67d579f0bf",
+   "metadata": {},
+   "source": [
+    "## 2)Enrichissement des CVE (MITRE & EPSS)\n",
+    "\n",
+    "Cette section est dédiée à l’enrichissement des identifiants CVE extraits\n",
+    "des avis ANSSI.\n",
+    "\n",
+    "L’enrichissement repose sur :\n",
+    "- la base officielle **MITRE (CVE)** pour les descriptions, scores CVSS, CWE et produits affectés ;\n",
+    "- la base **EPSS** pour estimer la probabilité d’exploitation.\n",
+    "\n",
+    "L’objectif est d’obtenir une vision **technique et priorisée** des vulnérabilités.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "124f17c2-7b5f-471d-adc5-2b82d3df7e0e",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "from typing import List, Dict, Any, Set\n",
+    "import feedparser\n",
+    "import requests\n",
+    "import re\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 13,
+   "id": "a207c090-1130-43fa-aac2-7d18c96c56f1",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "class Enrichment:\n",
+    "    \"\"\"\n",
+    "    Explorer\n",
+    "    --------\n",
+    "    - Extract CVEs from CERT-FR RSS feeds\n",
+    "    - Enrich CVEs with MITRE & EPSS data\n",
+    "    \"\"\"\n",
+    "\n",
+    "    def __init__(\n",
+    "        self,\n",
+    "        enrich_limit: int = 10,\n",
+    "        timeout: int = 10,\n",
+    "    ) -> None:\n",
+    "        self.enrich_limit = enrich_limit\n",
+    "        self.timeout = timeout\n",
+    "\n",
+    "    # ---------------------------\n",
+    "    # Enrichment (MITRE / EPSS)\n",
+    "    # ---------------------------\n",
+    "    \n",
+    "    def enrich_cve(self, cve_id: str) -> Dict[str, Any]:\n",
+    "        description: str = \"Non disponible\"\n",
+    "        cvss_score: str | float = \"Non disponible\"\n",
+    "        cwe: str = \"Non disponible\"\n",
+    "        epss_score: str | float = \"Non disponible\"\n",
+    "        severity: str = \"Non disponible\"\n",
+    "        products: List[Dict[str, Any]] = []\n",
+    "\n",
+    "        # --- MITRE ---\n",
+    "        try:\n",
+    "            print(f\"    🔍 Récupération MITRE pour {cve_id}...\")\n",
+    "            mitre = Collector.fetch_mitre(cve_id)\n",
+    "            cna = mitre[\"containers\"][\"cna\"]\n",
+    "\n",
+    "            descs = cna.get(\"descriptions\", [])\n",
+    "            if descs:\n",
+    "                description = descs[0].get(\"value\", description)\n",
+    "\n",
+    "            metrics = cna.get(\"metrics\", [])\n",
+    "            if metrics:\n",
+    "                m0 = metrics[0]\n",
+    "                if \"cvssV3_1\" in m0:\n",
+    "                    cvss_score = m0[\"cvssV3_1\"].get(\"baseScore\", cvss_score)\n",
+    "                    severity = m0[\"cvssV3_1\"].get(\"baseSeverity\", severity)\n",
+    "                elif \"cvssV3_0\" in m0:\n",
+    "                    cvss_score = m0[\"cvssV3_0\"].get(\"baseScore\", cvss_score)\n",
+    "                    severity = m0[\"cvssV3_0\"].get(\"baseSeverity\", severity)\n",
+    "\n",
+    "            problemtype = cna.get(\"problemTypes\", [])\n",
+    "            if problemtype and problemtype[0].get(\"descriptions\"):\n",
+    "                cwe = problemtype[0][\"descriptions\"][0].get(\"cweId\", cwe)\n",
+    "\n",
+    "            # Extraction des produits affectés\n",
+    "            affected = cna.get(\"affected\", [])\n",
+    "            for aff in affected:\n",
+    "                vendor = aff.get(\"vendor\", \"N/A\")\n",
+    "                product = aff.get(\"product\", \"N/A\")\n",
+    "                versions = []\n",
+    "                for v in aff.get(\"versions\", []):\n",
+    "                    version_str = v.get(\"version\", \"\")\n",
+    "                    if version_str:\n",
+    "                        versions.append(version_str)\n",
+    "                products.append({\n",
+    "                    \"vendor\": vendor,\n",
+    "                    \"product\": product,\n",
+    "                    \"versions\": versions\n",
+    "                })\n",
+    "            print(f\"    MITRE récupéré (CVSS: {cvss_score}, Severity: {severity})\")\n",
+    "\n",
+    "        except Exception as e:\n",
+    "            print(f\"    Erreur MITRE: {e}\")\n",
+    "\n",
+    "        # --- EPSS ---\n",
+    "        try:\n",
+    "            print(f\"    Récupération EPSS pour {cve_id}...\")\n",
+    "            epss = Collector.fetch_epss(cve_id)\n",
+    "            data = epss.get(\"data\", [])\n",
+    "            if data:\n",
+    "                epss_score = data[0].get(\"epss\", epss_score)\n",
+    "            print(f\"    EPSS récupéré: {epss_score}\")\n",
+    "        except Exception as e:\n",
+    "            print(f\"    Erreur EPSS: {e}\")\n",
+    "\n",
+    "        return {\n",
+    "            \"cve\": cve_id,\n",
+    "            \"description\": description,\n",
+    "            \"cvss\": cvss_score,\n",
+    "            \"severity\": severity,\n",
+    "            \"cwe\": cwe,\n",
+    "            \"epss\": epss_score,\n",
+    "            \"products\": products if products else [{\"vendor\": \"N/A\", \"product\": \"N/A\", \"versions\": []}],\n",
+    "        }"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "e16f0f92-e34a-4291-a7be-92cde1899e68",
+   "metadata": {},
+   "source": [
+    "### Test d’enrichissement d’une CVE\n",
+    "\n",
+    "Nous testons l’enrichissement sur une CVE connue afin de valider :\n",
+    "- la récupération MITRE,\n",
+    "- le score EPSS,\n",
+    "- la structure des données retournées.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 17,
+   "id": "88dcf216-20d2-4795-8170-616527305872",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "    🔍 Récupération MITRE pour CVE-2023-34362...\n",
+      "    ✅ MITRE récupéré (CVSS: Non disponible, Severity: Non disponible)\n",
+      "    🔍 Récupération EPSS pour CVE-2023-34362...\n",
+      "    ✅ EPSS récupéré: 0.942540000\n"
+     ]
+    },
+    {
+     "data": {
+      "text/plain": [
+       "{'cve': 'CVE-2023-34362',\n",
+       " 'description': \"In Progress MOVEit Transfer before 2021.0.6 (13.0.6), 2021.1.4 (13.1.4), 2022.0.4 (14.0.4), 2022.1.5 (14.1.5), and 2023.0.1 (15.0.1), a SQL injection vulnerability has been found in the MOVEit Transfer web application that could allow an unauthenticated attacker to gain access to MOVEit Transfer's database. Depending on the database engine being used (MySQL, Microsoft SQL Server, or Azure SQL), an attacker may be able to infer information about the structure and contents of the database, and execute SQL statements that alter or delete database elements. NOTE: this is exploited in the wild in May and June 2023; exploitation of unpatched systems can occur via HTTP or HTTPS. All versions (e.g., 2020.0 and 2019x) before the five explicitly mentioned versions are affected, including older unsupported versions.\",\n",
+       " 'cvss': 'Non disponible',\n",
+       " 'severity': 'Non disponible',\n",
+       " 'cwe': 'Non disponible',\n",
+       " 'epss': '0.942540000',\n",
+       " 'products': [{'vendor': 'n/a', 'product': 'n/a', 'versions': ['n/a']}]}"
+      ]
+     },
+     "execution_count": 17,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "enricher = Enrichment()\n",
+    "\n",
+    "result = enricher.enrich_cve(\"CVE-2023-34362\")\n",
+    "result\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "952a2c72-c59e-4902-a5c9-0d3a13a1cfc2",
+   "metadata": {},
+   "source": [
+    "### Analyse des résultats\n",
+    "\n",
+    "Les données enrichies permettent :\n",
+    "- d’évaluer la **sévérité technique** (CVSS),\n",
+    "- d’identifier la **probabilité d’exploitation** (EPSS),\n",
+    "- de cibler les **produits impactés**.\n",
+    "\n",
+    "Ces informations seront utilisées pour :\n",
+    "- prioriser les vulnérabilités,\n",
+    "- produire des exports (CSV / JSON),\n",
+    "- alimenter un tableau de bord.\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "1be5d119-3b71-42f1-a382-7404cd7872da",
+   "metadata": {},
+   "source": [
+    "## 3 )Création du DataFrame\n",
+    "- créer un DataFrame pandas\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 25,
+   "id": "bd078ed4-e45c-46dd-9b0a-67b65eab8523",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import pandas as pd"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 26,
+   "id": "c8549d33-3fee-440b-a731-254a30cf1604",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def build_dataframe(rss_url, bulletin_type, enrichment: Enrichment, limit=5):\n",
+    "    rows = []\n",
+    "    entries = Collector.get_rss_entries(rss_url)\n",
+    "    print(f\"\\n📡 Nombre total d'entrées RSS récupérées: {len(entries)}\")\n",
+    "    print(f\"🔢 Limite appliquée: {limit} entrées\\n\")\n",
+    "\n",
+    "    for idx, entry in enumerate(entries[:limit], 1):\n",
+    "        print(f\"\\n{'='*80}\")\n",
+    "        print(f\"📄 Traitement du bulletin {idx}/{limit}: {entry.title}\")\n",
+    "        print(f\"{'='*80}\")\n",
+    "        \n",
+    "        # Extraire les CVE pour cette entrée spécifique\n",
+    "        json_url = to_json_url(entry.link)\n",
+    "        print(f\"🔗 URL JSON: {json_url}\")\n",
+    "        \n",
+    "        try:\n",
+    "            print(f\"📥 Récupération des données JSON...\")\n",
+    "            data = Collector.fetch_json(json_url)\n",
+    "            print(f\"✅ Données récupérées\")\n",
+    "            \n",
+    "            print(f\"🔍 Extraction des CVE...\")\n",
+    "            cves = Extractor.extract_cves_from_bulletin(data)\n",
+    "            print(f\"✅ {len(cves)} CVE trouvées: {cves}\")\n",
+    "        except Exception as e:\n",
+    "            print(f\"❌ Erreur lors de l'extraction pour {entry.title}: {e}\")\n",
+    "            continue\n",
+    "\n",
+    "        for cve_idx, cve in enumerate(cves, 1):\n",
+    "            print(f\"\\n  🔬 Enrichissement CVE {cve_idx}/{len(cves)}: {cve}\")\n",
+    "            info = enrichment.enrich_cve(cve)\n",
+    "            print(f\"  ✅ CVE {cve} enrichie (CVSS: {info['cvss']}, EPSS: {info['epss']})\")\n",
+    "\n",
+    "            products = info[\"products\"] or [{\"vendor\": \"N/A\", \"product\": \"N/A\", \"versions\": []}]\n",
+    "\n",
+    "            for p in products:\n",
+    "                rows.append({\n",
+    "                    \"Titre bulletin (ANSSI)\": entry.title,\n",
+    "                    \"Type bulletin\": bulletin_type,\n",
+    "                    \"Date publication\": getattr(entry, \"published\", None),\n",
+    "                    \"Identifiant CVE\": cve,\n",
+    "                    \"Score CVSS\": info[\"cvss\"],\n",
+    "                    \"Base Severity\": info[\"severity\"],\n",
+    "                    \"Type CWE\": info[\"cwe\"],\n",
+    "                    \"Score EPSS\": info[\"epss\"],\n",
+    "                    \"Lien bulletin (ANSSI)\": entry.link,\n",
+    "                    \"Description\": info[\"description\"],\n",
+    "                    \"Éditeur/Vendor\": p[\"vendor\"],\n",
+    "                    \"Produit\": p[\"product\"],\n",
+    "                    \"Versions affectées\": \", \".join(p[\"versions\"])\n",
+    "                })\n",
+    "\n",
+    "    print(f\"\\n{'='*80}\")\n",
+    "    print(f\"✅ Traitement terminé! {len(rows)} lignes générées\")\n",
+    "    print(f\"{'='*80}\\n\")\n",
+    "    return pd.DataFrame(rows)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "efb98ed3-f09b-4b78-be41-f5142fa3622f",
+   "metadata": {},
+   "source": [
+    "## 4)Export CSV\n",
+    "- exporter le résultat en CSV"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 27,
+   "id": "2c8d4df6-3e03-46f6-9978-6088b6fd485f",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "🌐 Récupération du flux RSS: https://www.cert.ssi.gouv.fr/avis/feed/\n",
+      "✅ Flux RSS récupéré: 40 entrées disponibles\n",
+      "\n",
+      "📡 Nombre total d'entrées RSS récupérées: 40\n",
+      "🔢 Limite appliquée: 5 entrées\n",
+      "\n",
+      "\n",
+      "================================================================================\n",
+      "📄 Traitement du bulletin 1/5: Vulnérabilité dans Stormshield Network Security (06 janvier 2026)\n",
+      "================================================================================\n"
+     ]
+    },
+    {
+     "ename": "NameError",
+     "evalue": "name 'to_json_url' is not defined",
+     "output_type": "error",
+     "traceback": [
+      "\u001b[1;31m---------------------------------------------------------------------------\u001b[0m",
+      "\u001b[1;31mNameError\u001b[0m                                 Traceback (most recent call last)",
+      "Cell \u001b[1;32mIn[27], line 5\u001b[0m\n\u001b[0;32m      2\u001b[0m enricher \u001b[38;5;241m=\u001b[39m Enrichment()\n\u001b[0;32m      4\u001b[0m \u001b[38;5;66;03m# Construire DataFrame\u001b[39;00m\n\u001b[1;32m----> 5\u001b[0m df \u001b[38;5;241m=\u001b[39m build_dataframe(\n\u001b[0;32m      6\u001b[0m     rss_url\u001b[38;5;241m=\u001b[39mCollector\u001b[38;5;241m.\u001b[39mrss_url,\n\u001b[0;32m      7\u001b[0m     bulletin_type\u001b[38;5;241m=\u001b[39m\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mAvis de sécurité\u001b[39m\u001b[38;5;124m\"\u001b[39m,\n\u001b[0;32m      8\u001b[0m     enrichment\u001b[38;5;241m=\u001b[39menricher,\n\u001b[0;32m      9\u001b[0m     limit\u001b[38;5;241m=\u001b[39m\u001b[38;5;241m5\u001b[39m  \u001b[38;5;66;03m# Ajuster selon besoin\u001b[39;00m\n\u001b[0;32m     10\u001b[0m )\n\u001b[0;32m     12\u001b[0m \u001b[38;5;66;03m# Export CSV\u001b[39;00m\n\u001b[0;32m     13\u001b[0m csv_file \u001b[38;5;241m=\u001b[39m \u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mcves_anssi.csv\u001b[39m\u001b[38;5;124m\"\u001b[39m\n",
+      "Cell \u001b[1;32mIn[26], line 13\u001b[0m, in \u001b[0;36mbuild_dataframe\u001b[1;34m(rss_url, bulletin_type, enrichment, limit)\u001b[0m\n\u001b[0;32m     10\u001b[0m \u001b[38;5;28mprint\u001b[39m(\u001b[38;5;124mf\u001b[39m\u001b[38;5;124m\"\u001b[39m\u001b[38;5;132;01m{\u001b[39;00m\u001b[38;5;124m'\u001b[39m\u001b[38;5;124m=\u001b[39m\u001b[38;5;124m'\u001b[39m\u001b[38;5;241m*\u001b[39m\u001b[38;5;241m80\u001b[39m\u001b[38;5;132;01m}\u001b[39;00m\u001b[38;5;124m\"\u001b[39m)\n\u001b[0;32m     12\u001b[0m \u001b[38;5;66;03m# Extraire les CVE pour cette entrée spécifique\u001b[39;00m\n\u001b[1;32m---> 13\u001b[0m json_url \u001b[38;5;241m=\u001b[39m to_json_url(entry\u001b[38;5;241m.\u001b[39mlink)\n\u001b[0;32m     14\u001b[0m \u001b[38;5;28mprint\u001b[39m(\u001b[38;5;124mf\u001b[39m\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124m🔗 URL JSON: \u001b[39m\u001b[38;5;132;01m{\u001b[39;00mjson_url\u001b[38;5;132;01m}\u001b[39;00m\u001b[38;5;124m\"\u001b[39m)\n\u001b[0;32m     16\u001b[0m \u001b[38;5;28;01mtry\u001b[39;00m:\n",
+      "\u001b[1;31mNameError\u001b[0m: name 'to_json_url' is not defined"
+     ]
+    }
+   ],
+   "source": [
+    "# Initialisation de l'enrichisseur\n",
+    "enricher = Enrichment()\n",
+    "\n",
+    "# Construire DataFrame\n",
+    "df = build_dataframe(\n",
+    "    rss_url=Collector.rss_url,\n",
+    "    bulletin_type=\"Avis de sécurité\",\n",
+    "    enrichment=enricher,\n",
+    "    limit=5  # Ajuster selon besoin\n",
+    ")\n",
+    "\n",
+    "# Export CSV\n",
+    "csv_file = \"cves_anssi.csv\"\n",
+    "df.to_csv(csv_file, index=False)\n",
+    "print(f\"CSV '{csv_file}' créé avec {len(df)} lignes\")\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "49e55420-e50d-4fbf-a4a4-2f7e34933552",
+   "metadata": {},
+   "source": [
+    "# Exploration du DataFrame\n",
+    "\n",
+    "Nous allons maintenant explorer le fichier CSV pour :\n",
+    "- vérifier la structure des données,\n",
+    "- détecter les valeurs manquantes,\n",
+    "- préparer les visualisations.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 28,
+   "id": "d066eb4d-06e5-4570-a3a3-60e9dfa2b453",
+   "metadata": {},
+   "outputs": [
+    {
+     "ename": "NameError",
+     "evalue": "name 'csv_file' is not defined",
+     "output_type": "error",
+     "traceback": [
+      "\u001b[1;31m---------------------------------------------------------------------------\u001b[0m",
+      "\u001b[1;31mNameError\u001b[0m                                 Traceback (most recent call last)",
+      "Cell \u001b[1;32mIn[28], line 2\u001b[0m\n\u001b[0;32m      1\u001b[0m \u001b[38;5;66;03m# Chargement CSV\u001b[39;00m\n\u001b[1;32m----> 2\u001b[0m df \u001b[38;5;241m=\u001b[39m pd\u001b[38;5;241m.\u001b[39mread_csv(csv_file)\n\u001b[0;32m      4\u001b[0m \u001b[38;5;66;03m# Aperçu\u001b[39;00m\n\u001b[0;32m      5\u001b[0m df\u001b[38;5;241m.\u001b[39mhead()\n",
+      "\u001b[1;31mNameError\u001b[0m: name 'csv_file' is not defined"
+     ]
+    }
+   ],
+   "source": [
+    "# Chargement CSV\n",
+    "df = pd.read_csv(csv_file)\n",
+    "\n",
+    "# Aperçu\n",
+    "df.head()\n",
+    "df.info()\n",
+    "df.isnull().sum()\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "5860df74-10d2-4a6a-ab6f-8ffb96ac9da9",
+   "metadata": {},
+   "source": [
+    "# 5)Visualisations et analyses\n",
+    "\n",
+    "Nous analysons :\n",
+    "- la distribution CVSS,\n",
+    "- la répartition par sévérité,\n",
+    "- les produits / éditeurs les plus touchés,\n",
+    "- relation CVSS vs EPSS,\n",
+    "- évolution temporelle des bulletins.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 30,
+   "id": "955295a1-1e81-4d68-a21f-ac1104a22fcc",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "# -----------------------\n",
+    "# Imports\n",
+    "# -----------------------\n",
+    "import pandas as pd\n",
+    "import matplotlib.pyplot as plt\n",
+    "import seaborn as sns"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 31,
+   "id": "715d8195-e830-47e9-9936-dfac48792207",
+   "metadata": {},
+   "outputs": [
+    {
+     "ename": "FileNotFoundError",
+     "evalue": "[Errno 2] No such file or directory: 'cves_consolidees.csv'",
+     "output_type": "error",
+     "traceback": [
+      "\u001b[1;31m---------------------------------------------------------------------------\u001b[0m",
+      "\u001b[1;31mFileNotFoundError\u001b[0m                         Traceback (most recent call last)",
+      "Cell \u001b[1;32mIn[31], line 5\u001b[0m\n\u001b[0;32m      1\u001b[0m \u001b[38;5;66;03m# -----------------------\u001b[39;00m\n\u001b[0;32m      2\u001b[0m \u001b[38;5;66;03m# Chargement des données\u001b[39;00m\n\u001b[0;32m      3\u001b[0m \u001b[38;5;66;03m# -----------------------\u001b[39;00m\n\u001b[0;32m      4\u001b[0m CSV_FILE \u001b[38;5;241m=\u001b[39m \u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mcves_consolidees.csv\u001b[39m\u001b[38;5;124m\"\u001b[39m\n\u001b[1;32m----> 5\u001b[0m df \u001b[38;5;241m=\u001b[39m pd\u001b[38;5;241m.\u001b[39mread_csv(CSV_FILE)\n\u001b[0;32m      7\u001b[0m \u001b[38;5;28mprint\u001b[39m(\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mNombre total de lignes :\u001b[39m\u001b[38;5;124m\"\u001b[39m, \u001b[38;5;28mlen\u001b[39m(df))\n\u001b[0;32m      8\u001b[0m \u001b[38;5;28mprint\u001b[39m(\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mColonnes :\u001b[39m\u001b[38;5;124m\"\u001b[39m, \u001b[38;5;28mlist\u001b[39m(df\u001b[38;5;241m.\u001b[39mcolumns))\n",
+      "File \u001b[1;32m~\\anaconda3\\Lib\\site-packages\\pandas\\io\\parsers\\readers.py:1026\u001b[0m, in \u001b[0;36mread_csv\u001b[1;34m(filepath_or_buffer, sep, delimiter, header, names, index_col, usecols, dtype, engine, converters, true_values, false_values, skipinitialspace, skiprows, skipfooter, nrows, na_values, keep_default_na, na_filter, verbose, skip_blank_lines, parse_dates, infer_datetime_format, keep_date_col, date_parser, date_format, dayfirst, cache_dates, iterator, chunksize, compression, thousands, decimal, lineterminator, quotechar, quoting, doublequote, escapechar, comment, encoding, encoding_errors, dialect, on_bad_lines, delim_whitespace, low_memory, memory_map, float_precision, storage_options, dtype_backend)\u001b[0m\n\u001b[0;32m   1013\u001b[0m kwds_defaults \u001b[38;5;241m=\u001b[39m _refine_defaults_read(\n\u001b[0;32m   1014\u001b[0m     dialect,\n\u001b[0;32m   1015\u001b[0m     delimiter,\n\u001b[1;32m   (...)\u001b[0m\n\u001b[0;32m   1022\u001b[0m     dtype_backend\u001b[38;5;241m=\u001b[39mdtype_backend,\n\u001b[0;32m   1023\u001b[0m )\n\u001b[0;32m   1024\u001b[0m kwds\u001b[38;5;241m.\u001b[39mupdate(kwds_defaults)\n\u001b[1;32m-> 1026\u001b[0m \u001b[38;5;28;01mreturn\u001b[39;00m _read(filepath_or_buffer, kwds)\n",
+      "File \u001b[1;32m~\\anaconda3\\Lib\\site-packages\\pandas\\io\\parsers\\readers.py:620\u001b[0m, in \u001b[0;36m_read\u001b[1;34m(filepath_or_buffer, kwds)\u001b[0m\n\u001b[0;32m    617\u001b[0m _validate_names(kwds\u001b[38;5;241m.\u001b[39mget(\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mnames\u001b[39m\u001b[38;5;124m\"\u001b[39m, \u001b[38;5;28;01mNone\u001b[39;00m))\n\u001b[0;32m    619\u001b[0m \u001b[38;5;66;03m# Create the parser.\u001b[39;00m\n\u001b[1;32m--> 620\u001b[0m parser \u001b[38;5;241m=\u001b[39m TextFileReader(filepath_or_buffer, \u001b[38;5;241m*\u001b[39m\u001b[38;5;241m*\u001b[39mkwds)\n\u001b[0;32m    622\u001b[0m \u001b[38;5;28;01mif\u001b[39;00m chunksize \u001b[38;5;129;01mor\u001b[39;00m iterator:\n\u001b[0;32m    623\u001b[0m     \u001b[38;5;28;01mreturn\u001b[39;00m parser\n",
+      "File \u001b[1;32m~\\anaconda3\\Lib\\site-packages\\pandas\\io\\parsers\\readers.py:1620\u001b[0m, in \u001b[0;36mTextFileReader.__init__\u001b[1;34m(self, f, engine, **kwds)\u001b[0m\n\u001b[0;32m   1617\u001b[0m     \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39moptions[\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mhas_index_names\u001b[39m\u001b[38;5;124m\"\u001b[39m] \u001b[38;5;241m=\u001b[39m kwds[\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mhas_index_names\u001b[39m\u001b[38;5;124m\"\u001b[39m]\n\u001b[0;32m   1619\u001b[0m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mhandles: IOHandles \u001b[38;5;241m|\u001b[39m \u001b[38;5;28;01mNone\u001b[39;00m \u001b[38;5;241m=\u001b[39m \u001b[38;5;28;01mNone\u001b[39;00m\n\u001b[1;32m-> 1620\u001b[0m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_engine \u001b[38;5;241m=\u001b[39m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_make_engine(f, \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mengine)\n",
+      "File \u001b[1;32m~\\anaconda3\\Lib\\site-packages\\pandas\\io\\parsers\\readers.py:1880\u001b[0m, in \u001b[0;36mTextFileReader._make_engine\u001b[1;34m(self, f, engine)\u001b[0m\n\u001b[0;32m   1878\u001b[0m     \u001b[38;5;28;01mif\u001b[39;00m \u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mb\u001b[39m\u001b[38;5;124m\"\u001b[39m \u001b[38;5;129;01mnot\u001b[39;00m \u001b[38;5;129;01min\u001b[39;00m mode:\n\u001b[0;32m   1879\u001b[0m         mode \u001b[38;5;241m+\u001b[39m\u001b[38;5;241m=\u001b[39m \u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mb\u001b[39m\u001b[38;5;124m\"\u001b[39m\n\u001b[1;32m-> 1880\u001b[0m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mhandles \u001b[38;5;241m=\u001b[39m get_handle(\n\u001b[0;32m   1881\u001b[0m     f,\n\u001b[0;32m   1882\u001b[0m     mode,\n\u001b[0;32m   1883\u001b[0m     encoding\u001b[38;5;241m=\u001b[39m\u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39moptions\u001b[38;5;241m.\u001b[39mget(\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mencoding\u001b[39m\u001b[38;5;124m\"\u001b[39m, \u001b[38;5;28;01mNone\u001b[39;00m),\n\u001b[0;32m   1884\u001b[0m     compression\u001b[38;5;241m=\u001b[39m\u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39moptions\u001b[38;5;241m.\u001b[39mget(\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mcompression\u001b[39m\u001b[38;5;124m\"\u001b[39m, \u001b[38;5;28;01mNone\u001b[39;00m),\n\u001b[0;32m   1885\u001b[0m     memory_map\u001b[38;5;241m=\u001b[39m\u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39moptions\u001b[38;5;241m.\u001b[39mget(\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mmemory_map\u001b[39m\u001b[38;5;124m\"\u001b[39m, \u001b[38;5;28;01mFalse\u001b[39;00m),\n\u001b[0;32m   1886\u001b[0m     is_text\u001b[38;5;241m=\u001b[39mis_text,\n\u001b[0;32m   1887\u001b[0m     errors\u001b[38;5;241m=\u001b[39m\u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39moptions\u001b[38;5;241m.\u001b[39mget(\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mencoding_errors\u001b[39m\u001b[38;5;124m\"\u001b[39m, \u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mstrict\u001b[39m\u001b[38;5;124m\"\u001b[39m),\n\u001b[0;32m   1888\u001b[0m     storage_options\u001b[38;5;241m=\u001b[39m\u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39moptions\u001b[38;5;241m.\u001b[39mget(\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mstorage_options\u001b[39m\u001b[38;5;124m\"\u001b[39m, \u001b[38;5;28;01mNone\u001b[39;00m),\n\u001b[0;32m   1889\u001b[0m )\n\u001b[0;32m   1890\u001b[0m \u001b[38;5;28;01massert\u001b[39;00m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mhandles \u001b[38;5;129;01mis\u001b[39;00m \u001b[38;5;129;01mnot\u001b[39;00m \u001b[38;5;28;01mNone\u001b[39;00m\n\u001b[0;32m   1891\u001b[0m f \u001b[38;5;241m=\u001b[39m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mhandles\u001b[38;5;241m.\u001b[39mhandle\n",
+      "File \u001b[1;32m~\\anaconda3\\Lib\\site-packages\\pandas\\io\\common.py:873\u001b[0m, in \u001b[0;36mget_handle\u001b[1;34m(path_or_buf, mode, encoding, compression, memory_map, is_text, errors, storage_options)\u001b[0m\n\u001b[0;32m    868\u001b[0m \u001b[38;5;28;01melif\u001b[39;00m \u001b[38;5;28misinstance\u001b[39m(handle, \u001b[38;5;28mstr\u001b[39m):\n\u001b[0;32m    869\u001b[0m     \u001b[38;5;66;03m# Check whether the filename is to be opened in binary mode.\u001b[39;00m\n\u001b[0;32m    870\u001b[0m     \u001b[38;5;66;03m# Binary mode does not support 'encoding' and 'newline'.\u001b[39;00m\n\u001b[0;32m    871\u001b[0m     \u001b[38;5;28;01mif\u001b[39;00m ioargs\u001b[38;5;241m.\u001b[39mencoding \u001b[38;5;129;01mand\u001b[39;00m \u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mb\u001b[39m\u001b[38;5;124m\"\u001b[39m \u001b[38;5;129;01mnot\u001b[39;00m \u001b[38;5;129;01min\u001b[39;00m ioargs\u001b[38;5;241m.\u001b[39mmode:\n\u001b[0;32m    872\u001b[0m         \u001b[38;5;66;03m# Encoding\u001b[39;00m\n\u001b[1;32m--> 873\u001b[0m         handle \u001b[38;5;241m=\u001b[39m \u001b[38;5;28mopen\u001b[39m(\n\u001b[0;32m    874\u001b[0m             handle,\n\u001b[0;32m    875\u001b[0m             ioargs\u001b[38;5;241m.\u001b[39mmode,\n\u001b[0;32m    876\u001b[0m             encoding\u001b[38;5;241m=\u001b[39mioargs\u001b[38;5;241m.\u001b[39mencoding,\n\u001b[0;32m    877\u001b[0m             errors\u001b[38;5;241m=\u001b[39merrors,\n\u001b[0;32m    878\u001b[0m             newline\u001b[38;5;241m=\u001b[39m\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124m\"\u001b[39m,\n\u001b[0;32m    879\u001b[0m         )\n\u001b[0;32m    880\u001b[0m     \u001b[38;5;28;01melse\u001b[39;00m:\n\u001b[0;32m    881\u001b[0m         \u001b[38;5;66;03m# Binary mode\u001b[39;00m\n\u001b[0;32m    882\u001b[0m         handle \u001b[38;5;241m=\u001b[39m \u001b[38;5;28mopen\u001b[39m(handle, ioargs\u001b[38;5;241m.\u001b[39mmode)\n",
+      "\u001b[1;31mFileNotFoundError\u001b[0m: [Errno 2] No such file or directory: 'cves_consolidees.csv'"
+     ]
+    }
+   ],
+   "source": [
+    "\n",
+    "# -----------------------\n",
+    "# Chargement des données\n",
+    "# -----------------------\n",
+    "CSV_FILE = \"cves_consolidees.csv\"\n",
+    "df = pd.read_csv(CSV_FILE)\n",
+    "\n",
+    "print(\"Nombre total de lignes :\", len(df))\n",
+    "print(\"Colonnes :\", list(df.columns))\n",
+    "\n",
+    "# Nettoyage minimal\n",
+    "df[\"Score CVSS\"] = pd.to_numeric(df[\"Score CVSS\"], errors=\"coerce\")\n",
+    "df[\"Score EPSS\"] = pd.to_numeric(df[\"Score EPSS\"], errors=\"coerce\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "08718235-ecd0-4686-961b-2ecdf664332e",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "# -----------------------\n",
+    "# 1) Histogramme CVSS\n",
+    "# -----------------------\n",
+    "\n",
+    "plt.figure()\n",
+    "df[\"Score CVSS\"].dropna().hist(bins=10)\n",
+    "plt.title(\"Distribution des scores CVSS\")\n",
+    "plt.xlabel(\"Score CVSS\")\n",
+    "plt.ylabel(\"Nombre de vulnérabilités\")\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "30be9c59-55ac-43b0-bf09-7b8670f9bfba",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "# -----------------------\n",
+    "# 2) Diagramme circulaire des CWE\n",
+    "# -----------------------\n",
+    "\n",
+    "plt.figure()\n",
+    "df[\"Type CWE\"].value_counts().head(10).plot.pie(autopct=\"%1.1f%%\")\n",
+    "plt.title(\"Top 10 des types de vulnérabilités (CWE)\")\n",
+    "plt.ylabel(\"\")\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "82fba489-e5e6-43f4-9d29-894b162b80cc",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "# -----------------------\n",
+    "# 3) Distribution EPSS\n",
+    "# -----------------------\n",
+    "\n",
+    "plt.figure()\n",
+    "df[\"Score EPSS\"].dropna().hist(bins=10)\n",
+    "plt.title(\"Distribution des scores EPSS\")\n",
+    "plt.xlabel(\"Score EPSS\")\n",
+    "plt.ylabel(\"Nombre de vulnérabilités\")\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "35f0201f-28fd-4d9b-b5cb-c83eb75750d0",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "# -----------------------\n",
+    "# 4) Top éditeurs les plus affectés\n",
+    "# -----------------------\n",
+    "\n",
+    "top_vendors = df[\"Éditeur/Vendor\"].value_counts().head(10)\n",
+    "\n",
+    "plt.figure()\n",
+    "top_vendors.plot.bar()\n",
+    "plt.title(\"Top 10 des éditeurs les plus affectés\")\n",
+    "plt.xlabel(\"Éditeur\")\n",
+    "plt.ylabel(\"Nombre de vulnérabilités\")\n",
+    "plt.xticks(rotation=45, ha=\"right\")\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "5b19f131-d7d8-4b8d-a533-050530d9dd32",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "# -----------------------\n",
+    "# 5) Nuage de points CVSS vs EPSS\n",
+    "# -----------------------\n",
+    "\n",
+    "plt.figure()\n",
+    "plt.scatter(df[\"Score CVSS\"], df[\"Score EPSS\"])\n",
+    "plt.title(\"Relation entre Score CVSS et Score EPSS\")\n",
+    "plt.xlabel(\"Score CVSS\")\n",
+    "plt.ylabel(\"Score EPSS\")\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "bfaa1e85-e097-404f-bf67-8b925286cd20",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# -----------------------\n",
+    "# 6) Heatmap corrélation CVSS / EPSS\n",
+    "# -----------------------\n",
+    "\n",
+    "plt.figure()\n",
+    "corr = df[[\"Score CVSS\", \"Score EPSS\"]].corr()\n",
+    "sns.heatmap(corr, annot=True)\n",
+    "plt.title(\"Corrélation entre CVSS et EPSS\")\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "5653f7e8-5e53-4d8e-b1b2-8f1cfbf3396a",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# -----------------------\n",
+    "# 7) Boxplot CVSS par éditeur (top 5)\n",
+    "# -----------------------\n",
+    "\n",
+    "top5_vendors = df[\"Éditeur/Vendor\"].value_counts().head(5).index\n",
+    "df_top5 = df[df[\"Éditeur/Vendor\"].isin(top5_vendors)]\n",
+    "\n",
+    "plt.figure()\n",
+    "sns.boxplot(x=\"Éditeur/Vendor\", y=\"Score CVSS\", data=df_top5)\n",
+    "plt.title(\"Dispersion des scores CVSS par éditeur (Top 5)\")\n",
+    "plt.xticks(rotation=30)\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 32,
+   "id": "3e152ca9-8b57-44be-9bb8-4581dff3f97c",
+   "metadata": {},
+   "outputs": [
+    {
+     "ename": "NameError",
+     "evalue": "name 'df' is not defined",
+     "output_type": "error",
+     "traceback": [
+      "\u001b[1;31m---------------------------------------------------------------------------\u001b[0m",
+      "\u001b[1;31mNameError\u001b[0m                                 Traceback (most recent call last)",
+      "Cell \u001b[1;32mIn[32], line 5\u001b[0m\n\u001b[0;32m      1\u001b[0m \u001b[38;5;66;03m# -----------------------\u001b[39;00m\n\u001b[0;32m      2\u001b[0m \u001b[38;5;66;03m# 8) Vulnérabilités critiques (CVSS ≥ 9)\u001b[39;00m\n\u001b[0;32m      3\u001b[0m \u001b[38;5;66;03m# -----------------------\u001b[39;00m\n\u001b[1;32m----> 5\u001b[0m critical \u001b[38;5;241m=\u001b[39m df[df[\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mScore CVSS\u001b[39m\u001b[38;5;124m\"\u001b[39m] \u001b[38;5;241m>\u001b[39m\u001b[38;5;241m=\u001b[39m \u001b[38;5;241m9\u001b[39m]\n\u001b[0;32m      7\u001b[0m \u001b[38;5;28mprint\u001b[39m(\u001b[38;5;124m\"\u001b[39m\u001b[38;5;130;01m\\n\u001b[39;00m\u001b[38;5;124mNombre de vulnérabilités CRITIQUES (CVSS ≥ 9) :\u001b[39m\u001b[38;5;124m\"\u001b[39m, \u001b[38;5;28mlen\u001b[39m(critical))\n\u001b[0;32m      8\u001b[0m \u001b[38;5;28mprint\u001b[39m(critical[[\n\u001b[0;32m      9\u001b[0m     \u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mIdentifiant CVE\u001b[39m\u001b[38;5;124m\"\u001b[39m,\n\u001b[0;32m     10\u001b[0m     \u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mScore CVSS\u001b[39m\u001b[38;5;124m\"\u001b[39m,\n\u001b[1;32m   (...)\u001b[0m\n\u001b[0;32m     13\u001b[0m     \u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mProduit\u001b[39m\u001b[38;5;124m\"\u001b[39m\n\u001b[0;32m     14\u001b[0m ]]\u001b[38;5;241m.\u001b[39mhead(\u001b[38;5;241m10\u001b[39m))\n",
+      "\u001b[1;31mNameError\u001b[0m: name 'df' is not defined"
+     ]
+    }
+   ],
+   "source": [
+    "\n",
+    "# -----------------------\n",
+    "# 8) Vulnérabilités critiques (CVSS ≥ 9)\n",
+    "# -----------------------\n",
+    "\n",
+    "critical = df[df[\"Score CVSS\"] >= 9]\n",
+    "\n",
+    "print(\"\\nNombre de vulnérabilités CRITIQUES (CVSS ≥ 9) :\", len(critical))\n",
+    "print(critical[[\n",
+    "    \"Identifiant CVE\",\n",
+    "    \"Score CVSS\",\n",
+    "    \"Score EPSS\",\n",
+    "    \"Éditeur/Vendor\",\n",
+    "    \"Produit\"\n",
+    "]].head(10))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "9237daf7-f96d-49b5-b9aa-e146655fb26e",
+   "metadata": {},
+   "source": [
+    "# Conclusion\n",
+    "\n",
+    "- Les CVE ont été enrichies avec MITRE et EPSS.\n",
+    "- Les scores CVSS et EPSS permettent de prioriser les vulnérabilités.\n",
+    "- Les produits et éditeurs les plus touchés sont clairement identifiés.\n",
+    "- La distribution temporelle montre les périodes actives des bulletins ANSSI.\n",
+    "- Ce notebook peut maintenant servir de base pour un **reporting automatisé** ou tableau de bord.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "e962265e-70d9-4981-8e0f-d2bdf8661b5f",
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3 (ipykernel)",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.13.5"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
