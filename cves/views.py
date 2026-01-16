@@ -102,7 +102,7 @@ class SendCVEEmailView(APIView):
             </style>
         </head>
         <body>
-            <h1>🔒 CVE Security Report</h1>
+            <h1>CVE Security Report</h1>
             <p>Here are the CVE alerts you requested:</p>
         """
         
@@ -117,8 +117,8 @@ class SendCVEEmailView(APIView):
                     <span class="severity" style="background-color: {severity_color};">{severity}</span>
                 </div>
                 <div class="cve-title">{cve.titre_bulletin}</div>
-                <div class="cve-meta">📅 Published: {cve.date_publication.strftime('%B %d, %Y')}</div>
-                <div class="cve-meta">🔗 <a href="{cve.lien_bulletin}" target="_blank">View Full Bulletin</a></div>
+                <div class="cve-meta">Published: {cve.date_publication.strftime('%B %d, %Y')}</div>
+                <div class="cve-meta"><a href="{cve.lien_bulletin}" target="_blank">View Full Bulletin</a></div>
                 <div class="cve-desc">{cve.description[:300]}{'...' if len(cve.description) > 300 else ''}</div>
             </div>
             """
@@ -126,7 +126,7 @@ class SendCVEEmailView(APIView):
         html_content += """
             <div class="footer">
                 <p>This is an automated security alert from your CVE monitoring system.</p>
-                <p>Stay secure! 🛡️</p>
+                <p>Stay secure!</p>
             </div>
         </body>
         </html>

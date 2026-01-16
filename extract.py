@@ -55,7 +55,7 @@ class Extractor:
             try:
                 data = Collector.fetch_json(json_url)
             except Exception as e:
-                print("❌ Erreur JSON :", e)
+                print("Erreur JSON :", e)
                 continue
 
             cves = Extractor.extract_cves_from_bulletin(data)

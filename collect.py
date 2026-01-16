@@ -8,9 +8,9 @@ class Collector:
 
     @staticmethod
     def get_rss_entries(url) -> feedparser.util.FeedParserDict:
-        print(f"🌐 Récupération du flux RSS: {url}")
+        print(f"Récupération du flux RSS: {url}")
         rss_feed = feedparser.parse(url)
-        print(f"✅ Flux RSS récupéré: {len(rss_feed.entries)} entrées disponibles")
+        print(f"Flux RSS récupéré: {len(rss_feed.entries)} entrées disponibles")
         return rss_feed.entries
 
     @staticmethod
