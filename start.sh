@@ -64,13 +64,13 @@ BACKEND_PID=$!
 sleep 2
 
 # Start React frontend
-echo -e "\n${GREEN}⚛️  Starting React frontend on http://localhost:3000${NC}"
+echo -e "\n${GREEN}Starting React frontend on http://localhost:3000${NC}"
 cd cve-frontend
 npm start &
 FRONTEND_PID=$!
 
 echo -e "\n${BLUE}================================${NC}"
-echo -e "${GREEN}✅ Both servers are running!${NC}"
+echo -e "${GREEN}Both servers are running!${NC}"
 echo -e "${BLUE}================================${NC}"
 echo -e "Backend:  http://127.0.0.1:8000"
 echo -e "Frontend: http://localhost:3000"

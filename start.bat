@@ -48,12 +48,12 @@ timeout /t 2 /nobreak >nul
 
 REM Start React frontend in a new window
 echo.
-echo ⚛️  Starting React frontend on http://localhost:3000
+echo Starting React frontend on http://localhost:3000
 start "React Frontend" cmd /k "cd cve-frontend && npm start"
 
 echo.
 echo ================================
-echo ✅ Both servers are starting!
+echo Both servers are starting!
 echo ================================
 echo Backend:  http://127.0.0.1:8000
 echo Frontend: http://localhost:3000
