@@ -7,9 +7,6 @@ It features a webpage where one user can send the extracted CVEs to some emails 
 > [!NOTE] 
 All mails will be trapped by mailtrap
 
-# Prerequisites:
-Make sure a python virtual environment is sourced and that you have installed all needed dependencies (e.g., `pip install -r requirements.txt`)
-
 # Running the project
 
 You will need to:
