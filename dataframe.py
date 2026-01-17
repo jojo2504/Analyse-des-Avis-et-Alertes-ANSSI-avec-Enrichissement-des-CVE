@@ -24,6 +24,9 @@ def build_dataframe(rss_url, bulletin_type, enrichment: Enrichment, limit=5):
             data = Collector.fetch_json(json_url)
             print(f"Données récupérées")
             
+            # Récupérer l'ID ANSSI
+            anssi_id = data.get("reference", "N/A")
+            
             print(f"Extraction des CVE...")
             cves = Extractor.extract_cves_from_bulletin(data)
             print(f"{len(cves)} CVE trouvées: {cves}")
@@ -40,6 +43,7 @@ def build_dataframe(rss_url, bulletin_type, enrichment: Enrichment, limit=5):
 
             for p in products:
                 rows.append({
+                    "ID ANSSI": anssi_id,
                     "Titre bulletin (ANSSI)": entry.title,
                     "Type bulletin": bulletin_type,
                     "Date publication": getattr(entry, "published", None),
