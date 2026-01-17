@@ -13,9 +13,9 @@ Make sure a python virtual environment is sourced and that you have installed al
 # Running the project
 
 You will need to:
+- Create a mail trap account and put the password at `cve-manager/settings.py`
 - Copy/Rename the `cve_manager/settings.py.example` to `cve_manager/settings.py.example`.
 - Update the `username` and `password` for mailtrap.
-- Create a mail trap account and put the password at `cve-manager/settings.py`
 - run `start.sh` or `start.bat` if the csv file (default example already in root directory) has already been computed, else:
   - `python main.py` to generate the csv file
   - `python manage.py import_cves` to import the csv file to the backend local database
