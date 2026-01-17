@@ -15,8 +15,8 @@ if __name__ == "__main__":
     
     print(f"Génération du fichier CSV...")
     df.to_csv("cves_consolidees.csv", index=False)
-    print(f"✅ CSV généré : cves_consolidees.csv ({len(df)} lignes)")
+    print(f"CSV généré : cves_consolidees.csv ({len(df)} lignes)")
     
     print("\n" + "="*80)
-    print("✅ TERMINÉ")
+    print("TERMINÉ")
     print("="*80 + "\n")

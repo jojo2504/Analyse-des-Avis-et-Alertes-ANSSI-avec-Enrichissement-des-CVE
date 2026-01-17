@@ -56,6 +56,6 @@ def build_dataframe(rss_url, bulletin_type, enrichment: Enrichment, limit=5):
                 })
 
     print(f"\n{'='*80}")
-    print(f"✅ Traitement terminé! {len(rows)} lignes générées")
+    print(f"Traitement terminé! {len(rows)} lignes générées")
     print(f"{'='*80}\n")
     return pd.DataFrame(rows)
